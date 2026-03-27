@@ -1,0 +1,298 @@
+import { generateText, Output } from "ai";
+import type {
+  GenerateTextOnToolCallFinishCallback,
+  GenerateTextOnToolCallStartCallback,
+  ModelMessage,
+  ToolSet
+} from "ai";
+import type { z } from "zod";
+import {
+  isMediaInput,
+  type AudioInput,
+  type FileInput,
+  type ImageInput
+} from "./media";
+import type { Signature } from "./signature";
+import type { ModuleContext, TraceVisibility } from "./types";
+import { stableStringify, stringifyForStorage } from "./utils";
+
+type TraceRecorder = {
+  setMetadata(metadata: Record<string, string | null>): void;
+  append(
+    visibility: TraceVisibility,
+    kind: string,
+    level: "info" | "warn" | "error",
+    message: string,
+    payload?: Record<string, unknown>
+  ): Promise<void>;
+};
+
+type AdapterContext = ModuleContext & {
+  trace: TraceRecorder;
+};
+
+export interface PredictAdapterResult<Result> {
+  output: Result;
+  metadata?: {
+    modelId?: string | null;
+    adapterName?: string | null;
+    usageJson?: string | null;
+  };
+}
+
+export interface PredictAdapter {
+  readonly name: string;
+  execute<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+    context: AdapterContext,
+    signature: Signature<I, O>,
+    input: z.output<I>
+  ): Promise<PredictAdapterResult<z.output<O>>>;
+}
+
+type GenerateTextFn = typeof generateText;
+
+export class AISDKGenerateTextAdapter implements PredictAdapter {
+  readonly name = "ai-sdk-generate-text";
+  readonly #generateTextFn: GenerateTextFn;
+
+  constructor(options?: { generateText?: GenerateTextFn }) {
+    this.#generateTextFn = options?.generateText ?? generateText;
+  }
+
+  renderInput<I extends z.ZodTypeAny>(
+    signature: Signature<I, z.ZodTypeAny>,
+    input: z.output<I>
+  ): {
+    system: string | undefined;
+    messages: ModelMessage[];
+  } {
+    return {
+      system: signature.instructions,
+      messages: [
+        {
+          role: "user",
+          content: buildUserContent(signature.name, input)
+        }
+      ]
+    };
+  }
+
+  async execute<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+    context: AdapterContext,
+    signature: Signature<I, O>,
+    input: z.output<I>
+  ): Promise<PredictAdapterResult<z.output<O>>> {
+    const rendered = this.renderInput(signature, input);
+    const result = await this.#generateTextFn({
+      model: context.model,
+      system: rendered.system,
+      messages: rendered.messages,
+      tools: context.tools,
+      output: Output.object({
+        schema: signature.output,
+        name: signature.name,
+        description: signature.instructions
+      }),
+      experimental_onToolCallStart: createToolCallStartHandler(context.trace),
+      experimental_onToolCallFinish: createToolCallFinishHandler(context.trace)
+    });
+
+    const metadata = {
+      modelId: describeModel(context.model),
+      adapterName: this.name,
+      usageJson: stringifyForStorage(result.usage)
+    };
+
+    context.trace.setMetadata(metadata);
+
+    return {
+      output: result.output as z.output<O>,
+      metadata
+    };
+  }
+}
+
+export const AISDKGenerateObjectAdapter = AISDKGenerateTextAdapter;
+
+function buildUserContent(
+  signatureName: string,
+  input: unknown
+): Array<
+  | { type: "text"; text: string }
+  | {
+      type: "image";
+      image: URL | string | Uint8Array | ArrayBuffer;
+      mediaType?: string;
+    }
+  | {
+      type: "file";
+      data: URL | string | Uint8Array | ArrayBuffer;
+      mediaType: string;
+      filename?: string;
+    }
+> {
+  const content: Array<
+    | { type: "text"; text: string }
+    | {
+        type: "image";
+        image: URL | string | Uint8Array | ArrayBuffer;
+        mediaType?: string;
+      }
+    | {
+        type: "file";
+        data: URL | string | Uint8Array | ArrayBuffer;
+        mediaType: string;
+        filename?: string;
+      }
+  > = [{ type: "text", text: `signature: ${signatureName}` }];
+
+  if (input == null || typeof input !== "object" || Array.isArray(input)) {
+    content.push({
+      type: "text",
+      text: `input:\n${formatPromptValue(input)}`
+    });
+    return content;
+  }
+
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    if (isMediaInput(value)) {
+      content.push({ type: "text", text: `${key}:` });
+      content.push(renderMediaValue(value));
+      continue;
+    }
+
+    content.push({
+      type: "text",
+      text: `${key}:\n${formatPromptValue(value)}`
+    });
+  }
+
+  return content;
+}
+
+function renderMediaValue(value: ImageInput | FileInput | AudioInput) {
+  if (value.type === "image") {
+    if ("url" in value) {
+      return {
+        type: "image" as const,
+        image: new URL(value.url),
+        mediaType: value.mediaType
+      };
+    }
+
+    return {
+      type: "image" as const,
+      image: value.data,
+      mediaType: value.mediaType
+    };
+  }
+
+  if ("url" in value) {
+    return {
+      type: "file" as const,
+      data: new URL(value.url),
+      mediaType: value.mediaType,
+      filename: value.filename
+    };
+  }
+
+  return {
+    type: "file" as const,
+    data: value.data,
+    mediaType: value.mediaType,
+    filename: value.filename
+  };
+}
+
+function formatPromptValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  return stableStringify(value);
+}
+
+function createToolCallStartHandler(
+  trace: TraceRecorder
+): GenerateTextOnToolCallStartCallback<ToolSet> {
+  return async (event) => {
+    await trace.append(
+      "meta",
+      "tool_call_started",
+      "info",
+      `Tool call started: ${event.toolCall.toolName}`,
+      {
+        toolName: event.toolCall.toolName,
+        toolCallId: event.toolCall.toolCallId,
+        input: event.toolCall.input,
+        stepNumber: event.stepNumber
+      }
+    );
+  };
+}
+
+function createToolCallFinishHandler(
+  trace: TraceRecorder
+): GenerateTextOnToolCallFinishCallback<ToolSet> {
+  return async (event) => {
+    if (event.success) {
+      await trace.append(
+        "meta",
+        "tool_call_succeeded",
+        "info",
+        `Tool call succeeded: ${event.toolCall.toolName}`,
+        {
+          toolName: event.toolCall.toolName,
+          toolCallId: event.toolCall.toolCallId,
+          output: event.output,
+          stepNumber: event.stepNumber
+        }
+      );
+      return;
+    }
+
+    await trace.append(
+      "asi",
+      "tool_call_failed",
+      "warn",
+      `Tool call failed: ${event.toolCall.toolName}`,
+      {
+        toolName: event.toolCall.toolName,
+        toolCallId: event.toolCall.toolCallId,
+        error:
+          event.error instanceof Error
+            ? event.error.message
+            : String(event.error),
+        stepNumber: event.stepNumber
+      }
+    );
+  };
+}
+
+function describeModel(model: ModuleContext["model"]): string {
+  if (typeof model === "string") {
+    return model;
+  }
+
+  if (
+    typeof model === "object" &&
+    model !== null &&
+    "provider" in model &&
+    "modelId" in model &&
+    typeof model.provider === "string" &&
+    typeof model.modelId === "string"
+  ) {
+    return `${model.provider}:${model.modelId}`;
+  }
+
+  if (
+    typeof model === "object" &&
+    model !== null &&
+    "modelId" in model &&
+    typeof model.modelId === "string"
+  ) {
+    return model.modelId;
+  }
+
+  return "unknown";
+}
