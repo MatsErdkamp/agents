@@ -42,10 +42,6 @@
       "types": "./dist/think.d.ts",
       "import": "./dist/think.js"
     },
-    "./modules": {
-      "types": "./dist/modules/index.d.ts",
-      "import": "./dist/modules/index.js"
-    },
     "./session": {
       "types": "./dist/session/index.d.ts",
       "import": "./dist/session/index.js"

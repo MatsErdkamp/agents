@@ -78,7 +78,6 @@ import type { StreamChunkData } from "./message-builder";
 import { sanitizeMessage, enforceRowSizeLimit } from "./sanitize";
 
 export type { Session } from "./session/index";
-export * from "./modules/index";
 export type {
   FiberState,
   FiberRecoveryContext,

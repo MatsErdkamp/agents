@@ -1,6 +1,9 @@
 ---
+"@cloudflare/modules": minor
+"@cloudflare/evolve": minor
 "@cloudflare/think": minor
 ---
 
-Add an experimental `Predict` API with fluent signatures, multimodal AI SDK input
-adapters, and durable trace storage for future optimization workflows.
+Add a new `@cloudflare/modules` package for fluent signatures, `Predict`,
+multimodal AI SDK adapters, and durable trace storage, plus a new
+`@cloudflare/evolve` package with a first trace-review optimization strategy.

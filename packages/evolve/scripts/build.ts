@@ -6,16 +6,7 @@ async function main() {
     clean: true,
     dts: true,
     target: "es2021",
-    entry: [
-      "src/think.ts",
-      "src/session/index.ts",
-      "src/extensions/index.ts",
-      "src/tools/workspace.ts",
-      "src/tools/execute.ts",
-      "src/tools/extensions.ts",
-      "src/message-builder.ts",
-      "src/transport.ts"
-    ],
+    entry: ["src/index.ts"],
     deps: {
       skipNodeModulesBundle: true,
       neverBundle: ["cloudflare:workers"]
@@ -25,14 +16,11 @@ async function main() {
     fixedExtension: false
   });
 
-  // then run oxfmt on the generated .d.ts files
   execSync("oxfmt --write './dist/**/*.d.ts'");
-
   process.exit(0);
 }
 
 main().catch((err) => {
-  // Build failures should fail
   console.error(err);
   process.exit(1);
 });

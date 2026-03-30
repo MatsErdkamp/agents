@@ -1,0 +1,48 @@
+{
+  "name": "@cloudflare/modules",
+  "description": "Typed LM modules, signatures, multimodal adapters, and durable traces for Cloudflare Agents",
+  "keywords": ["cloudflare", "agents", "ai", "modules", "signatures"],
+  "type": "module",
+  "version": "0.1.0",
+  "license": "MIT",
+  "repository": {
+    "directory": "packages/modules",
+    "type": "git",
+    "url": "git+https://github.com/cloudflare/agents.git"
+  },
+  "author": "Cloudflare Inc.",
+  "bugs": {
+    "url": "https://github.com/cloudflare/agents/issues"
+  },
+  "peerDependencies": {
+    "@cloudflare/codemode": ">=0.3.0 <1.0.0",
+    "@cloudflare/shell": ">=0.3.0 <1.0.0",
+    "agents": ">=0.8.0 <1.0.0",
+    "ai": "^6.0.0",
+    "zod": "^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "agents": {
+      "optional": true
+    }
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./workers": {
+      "types": "./dist/workers-entry.d.ts",
+      "import": "./dist/workers-entry.js"
+    },
+    "./agents": {
+      "types": "./dist/agents-entry.d.ts",
+      "import": "./dist/agents-entry.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsx ./scripts/build.ts",
+    "test": "vitest run"
+  }
+}
