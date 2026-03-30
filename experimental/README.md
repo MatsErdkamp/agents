@@ -8,5 +8,8 @@ The code here is for exploration, prototyping, and validating patterns that may 
 
 - **[gadgets.md](./gadgets.md)** — Exploration of facets, isolation, and structural safety for agents. Covers the Gatekeeper/ApprovalQueue pattern, Worker Loader sandboxing, sub-agent facets, multi-room chat, and other patterns worth pulling into the SDK.
 - **[forever.md](./forever.md)** — Design doc for durable long-running execution. Covers keepAlive, fibers (spawnFiber/stashFiber), eviction recovery, and AIChatAgent integration. Implemented as mixins in `agents/experimental/forever` and `@cloudflare/ai-chat/experimental/forever`.
+- **[modules](./modules/)** — Experimental demo of the extracted `@cloudflare/modules` runtime with fluent signatures, composed modules, multimodal inputs, and trace summaries.
+- **[rlm-lab](./rlm-lab/)** — Experimental frontend for the shell-backed `RLM` module. It ingests a large dossier into a workspace, lets the model explore it through `state.*`, and surfaces trace events plus subagent-backed query behavior.
+- **[evolve](./evolve/)** — Experimental demo of the first `@cloudflare/evolve` loop: run a module, inspect traces, and request an instruction/signature suggestion from the trace-review strategy.
 - **[session-memory](./session-memory/)** — Example of the Session API for conversation history with automatic compaction. Demonstrates `agents/experimental/memory/session` with micro-compaction and LLM-based summarization.
 - **[workspace-chat](../examples/workspace-chat/)** — _(moved to examples/)_ AIChatAgent with a persistent virtual filesystem.

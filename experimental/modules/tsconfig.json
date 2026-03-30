@@ -1,0 +1,9 @@
+{
+  "extends": "agents/tsconfig",
+  "compilerOptions": {
+    "paths": {
+      "@cloudflare/think": ["../../packages/think/src/think.ts"],
+      "@cloudflare/modules": ["../../packages/modules/src/index.ts"]
+    }
+  }
+}

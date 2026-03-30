@@ -345,7 +345,16 @@ export class DynamicWorkerExecutor implements Executor {
         logs?: string[];
       }>;
     };
-    const response = await entrypoint.evaluate(dispatchers);
+
+    let response: { result: unknown; error?: string; logs?: string[] };
+    try {
+      response = await entrypoint.evaluate(dispatchers);
+    } catch (err) {
+      return {
+        result: undefined,
+        error: err instanceof Error ? err.message : String(err)
+      };
+    }
 
     if (response.error) {
       return { result: undefined, error: response.error, logs: response.logs };

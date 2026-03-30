@@ -1,0 +1,10 @@
+{
+  "extends": "agents/tsconfig",
+  "compilerOptions": {
+    "paths": {
+      "@cloudflare/evolve": ["../../packages/evolve/src/index.ts"],
+      "@cloudflare/think": ["../../packages/think/src/think.ts"],
+      "@cloudflare/modules": ["../../packages/modules/src/index.ts"]
+    }
+  }
+}
