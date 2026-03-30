@@ -33,6 +33,46 @@
         "name": "SlowStreamAgent"
       },
       {
+        "class_name": "ResponseAgent",
+        "name": "ResponseAgent"
+      },
+      {
+        "class_name": "ResponseContinuationAgent",
+        "name": "ResponseContinuationAgent"
+      },
+      {
+        "class_name": "ResponseThrowingAgent",
+        "name": "ResponseThrowingAgent"
+      },
+      {
+        "class_name": "ResponseSaveMessagesAgent",
+        "name": "ResponseSaveMessagesAgent"
+      },
+      {
+        "class_name": "LatestMessageConcurrencyAgent",
+        "name": "LatestMessageConcurrencyAgent"
+      },
+      {
+        "class_name": "MergeMessageConcurrencyAgent",
+        "name": "MergeMessageConcurrencyAgent"
+      },
+      {
+        "class_name": "DropMessageConcurrencyAgent",
+        "name": "DropMessageConcurrencyAgent"
+      },
+      {
+        "class_name": "DebounceMessageConcurrencyAgent",
+        "name": "DebounceMessageConcurrencyAgent"
+      },
+      {
+        "class_name": "InvalidDebounceMessageConcurrencyAgent",
+        "name": "InvalidDebounceMessageConcurrencyAgent"
+      },
+      {
+        "class_name": "MissingDebounceMessageConcurrencyAgent",
+        "name": "MissingDebounceMessageConcurrencyAgent"
+      },
+      {
         "class_name": "WaitMcpTrueAgent",
         "name": "WaitMcpTrueAgent"
       },
@@ -66,15 +106,38 @@
     },
     {
       "new_sqlite_classes": [
-        "WaitMcpTrueAgent",
-        "WaitMcpTimeoutAgent",
-        "WaitMcpFalseAgent"
+        "LatestMessageConcurrencyAgent",
+        "MergeMessageConcurrencyAgent",
+        "DropMessageConcurrencyAgent",
+        "DebounceMessageConcurrencyAgent",
+        "InvalidDebounceMessageConcurrencyAgent"
       ],
       "tag": "v5"
     },
     {
-      "new_sqlite_classes": ["CustomSanitizeAgent"],
+      "new_sqlite_classes": [
+        "WaitMcpTrueAgent",
+        "WaitMcpTimeoutAgent",
+        "WaitMcpFalseAgent"
+      ],
       "tag": "v6"
+    },
+    {
+      "new_sqlite_classes": [
+        "ResponseAgent",
+        "ResponseContinuationAgent",
+        "ResponseThrowingAgent",
+        "ResponseSaveMessagesAgent"
+      ],
+      "tag": "v7"
+    },
+    {
+      "new_sqlite_classes": ["CustomSanitizeAgent"],
+      "tag": "v8"
+    },
+    {
+      "new_sqlite_classes": ["MissingDebounceMessageConcurrencyAgent"],
+      "tag": "v9"
     }
   ]
 }

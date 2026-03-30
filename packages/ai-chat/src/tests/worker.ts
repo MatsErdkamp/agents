@@ -1,4 +1,9 @@
-import { AIChatAgent, type OnChatMessageOptions } from "../";
+import {
+  AIChatAgent,
+  type ChatResponseResult,
+  type OnChatMessageOptions,
+  type SaveMessagesResult
+} from "../";
 import type {
   UIMessage as ChatMessage,
   StreamTextOnFinishCallback,
@@ -40,6 +45,16 @@ export type Env = {
   AgentWithSuperCall: DurableObjectNamespace<AgentWithSuperCall>;
   AgentWithoutSuperCall: DurableObjectNamespace<AgentWithoutSuperCall>;
   SlowStreamAgent: DurableObjectNamespace<SlowStreamAgent>;
+  ResponseAgent: DurableObjectNamespace<ResponseAgent>;
+  ResponseContinuationAgent: DurableObjectNamespace<ResponseContinuationAgent>;
+  ResponseThrowingAgent: DurableObjectNamespace<ResponseThrowingAgent>;
+  ResponseSaveMessagesAgent: DurableObjectNamespace<ResponseSaveMessagesAgent>;
+  LatestMessageConcurrencyAgent: DurableObjectNamespace<LatestMessageConcurrencyAgent>;
+  MergeMessageConcurrencyAgent: DurableObjectNamespace<MergeMessageConcurrencyAgent>;
+  DropMessageConcurrencyAgent: DurableObjectNamespace<DropMessageConcurrencyAgent>;
+  DebounceMessageConcurrencyAgent: DurableObjectNamespace<DebounceMessageConcurrencyAgent>;
+  InvalidDebounceMessageConcurrencyAgent: DurableObjectNamespace<InvalidDebounceMessageConcurrencyAgent>;
+  MissingDebounceMessageConcurrencyAgent: DurableObjectNamespace<MissingDebounceMessageConcurrencyAgent>;
   WaitMcpTrueAgent: DurableObjectNamespace<WaitMcpTrueAgent>;
   WaitMcpTimeoutAgent: DurableObjectNamespace<WaitMcpTimeoutAgent>;
   WaitMcpFalseAgent: DurableObjectNamespace<WaitMcpFalseAgent>;
@@ -564,6 +579,8 @@ export class CustomSanitizeAgent extends AIChatAgent<Env> {
  */
 export class SlowStreamAgent extends AIChatAgent<Env> {
   private _startedRequestIds: string[] = [];
+  private _requestStartTimes = new Map<string, number>();
+  private _chatResponseResults: ChatResponseResult[] = [];
 
   async onChatMessage(
     _onFinish: StreamTextOnFinishCallback<ToolSet>,
@@ -571,6 +588,7 @@ export class SlowStreamAgent extends AIChatAgent<Env> {
   ) {
     if (options?.requestId) {
       this._startedRequestIds.push(options.requestId);
+      this._requestStartTimes.set(options.requestId, Date.now());
     }
 
     const body = options?.body as
@@ -641,6 +659,20 @@ export class SlowStreamAgent extends AIChatAgent<Env> {
     return [...this._startedRequestIds];
   }
 
+  getPersistedMessages(): ChatMessage[] {
+    const rawMessages = (
+      this.sql`select * from cf_ai_chat_agent_messages order by created_at` ||
+      []
+    ).map((row) => {
+      return JSON.parse(row.message as string);
+    });
+    return rawMessages;
+  }
+
+  getRequestStartTime(requestId: string): number | null {
+    return this._requestStartTimes.get(requestId) ?? null;
+  }
+
   isChatTurnActiveForTest(): boolean {
     return (
       this as unknown as { isChatTurnActive(): boolean }
@@ -676,6 +708,63 @@ export class SlowStreamAgent extends AIChatAgent<Env> {
     await this.saveMessages([...this.messages, message]);
   }
 
+  setTestBody(body: Record<string, unknown>): void {
+    (this as unknown as { _lastBody: Record<string, unknown> })._lastBody =
+      body;
+  }
+
+  async enqueueSyntheticUserMessage(
+    text: string,
+    options?: {
+      body?: Record<string, unknown>;
+    }
+  ): Promise<SaveMessagesResult> {
+    if (options?.body) {
+      this.setTestBody(options.body);
+    }
+    return this.saveMessages((messages) => [
+      ...messages,
+      {
+        id: `enqueued-${crypto.randomUUID()}`,
+        role: "user",
+        parts: [{ type: "text", text }]
+      }
+    ]);
+  }
+
+  async enqueueSyntheticUserMessagesInOrder(
+    messages: Array<{
+      text: string;
+      body?: Record<string, unknown>;
+    }>
+  ): Promise<SaveMessagesResult[]> {
+    return Promise.all(
+      messages.map((message) =>
+        this.enqueueSyntheticUserMessage(message.text, {
+          body: message.body
+        })
+      )
+    );
+  }
+
+  getPersistedUserTexts(): string[] {
+    return this.getPersistedMessages()
+      .filter((message) => message.role === "user")
+      .flatMap((message) =>
+        message.parts.flatMap((part) =>
+          part.type === "text" ? [part.text] : []
+        )
+      );
+  }
+
+  protected async onChatResponse(result: ChatResponseResult) {
+    this._chatResponseResults.push(result);
+  }
+
+  getChatResponseResults(): ChatResponseResult[] {
+    return [...this._chatResponseResults];
+  }
+
   async persistToolCallMessage(
     messageId: string,
     toolCallId: string,
@@ -704,6 +793,274 @@ export class SlowStreamAgent extends AIChatAgent<Env> {
     `;
     return result?.[0]?.cnt ?? 0;
   }
+}
+
+/**
+ * Test agent that records onChatResponse calls for verification.
+ * Uses slow streaming so tests can cancel/abort mid-stream.
+ */
+export class ResponseAgent extends AIChatAgent<Env> {
+  private _responseResults: ChatResponseResult[] = [];
+
+  async onChatMessage(
+    _onFinish: StreamTextOnFinishCallback<ToolSet>,
+    options?: OnChatMessageOptions
+  ) {
+    const body = options?.body as
+      | {
+          format?: string;
+          chunkCount?: number;
+          chunkDelayMs?: number;
+          throwError?: boolean;
+          useAbortSignal?: boolean;
+        }
+      | undefined;
+
+    const format = body?.format ?? "plaintext";
+    const chunkCount = body?.chunkCount ?? 3;
+    const chunkDelayMs = body?.chunkDelayMs ?? 10;
+    const throwError = body?.throwError ?? false;
+    const useAbortSignal = body?.useAbortSignal ?? false;
+    const abortSignal = useAbortSignal ? options?.abortSignal : undefined;
+
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async pull(controller) {
+        for (let i = 0; i < chunkCount; i++) {
+          if (abortSignal?.aborted) {
+            controller.close();
+            return;
+          }
+          if (chunkDelayMs > 0) {
+            await new Promise((r) => setTimeout(r, chunkDelayMs));
+          }
+          if (abortSignal?.aborted) {
+            controller.close();
+            return;
+          }
+
+          if (throwError && i === Math.floor(chunkCount / 2)) {
+            throw new Error("Simulated stream error");
+          }
+
+          if (format === "sse") {
+            const chunk = JSON.stringify({
+              type: "text-delta",
+              textDelta: `chunk-${i} `
+            });
+            controller.enqueue(encoder.encode(`data: ${chunk}\n\n`));
+          } else {
+            controller.enqueue(encoder.encode(`chunk-${i} `));
+          }
+        }
+        if (format === "sse") {
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        }
+        controller.close();
+      }
+    });
+
+    const contentType = format === "sse" ? "text/event-stream" : "text/plain";
+    return new Response(stream, {
+      headers: { "Content-Type": contentType }
+    });
+  }
+
+  protected async onChatResponse(result: ChatResponseResult) {
+    this._responseResults.push(result);
+  }
+
+  getChatResponseResults(): ChatResponseResult[] {
+    return [...this._responseResults];
+  }
+
+  clearChatResponseResults(): void {
+    this._responseResults = [];
+  }
+
+  async saveSyntheticUserMessage(text: string): Promise<void> {
+    const message: ChatMessage = {
+      id: `saved-${crypto.randomUUID()}`,
+      role: "user",
+      parts: [{ type: "text", text }]
+    };
+    await this.saveMessages([...this.messages, message]);
+  }
+
+  async waitForIdleForTest(): Promise<void> {
+    await (this as unknown as { waitForIdle(): Promise<void> }).waitForIdle();
+  }
+
+  getPersistedMessages(): ChatMessage[] {
+    return (
+      this.sql`select * from cf_ai_chat_agent_messages order by created_at` ||
+      []
+    ).map((row) => JSON.parse(row.message as string));
+  }
+}
+
+/**
+ * Test agent that records onChatResponse and supports tool continuation.
+ * Used to verify onChatResponse fires with continuation=true after auto-continue.
+ */
+export class ResponseContinuationAgent extends AIChatAgent<Env> {
+  private _responseResults: ChatResponseResult[] = [];
+
+  async onChatMessage(
+    _onFinish: StreamTextOnFinishCallback<ToolSet>,
+    _options?: OnChatMessageOptions
+  ) {
+    return new Response("Continuation response", {
+      headers: { "Content-Type": "text/plain" }
+    });
+  }
+
+  protected async onChatResponse(result: ChatResponseResult) {
+    this._responseResults.push(result);
+  }
+
+  getChatResponseResults(): ChatResponseResult[] {
+    return [...this._responseResults];
+  }
+
+  getPersistedMessages(): ChatMessage[] {
+    return (
+      this.sql`select * from cf_ai_chat_agent_messages order by created_at` ||
+      []
+    ).map((row) => JSON.parse(row.message as string));
+  }
+}
+
+/**
+ * Test agent whose onChatResponse throws — verifies the framework handles it
+ * gracefully without breaking the stream or masking the original error.
+ */
+export class ResponseThrowingAgent extends AIChatAgent<Env> {
+  private _streamCompleted = false;
+
+  async onChatMessage(
+    _onFinish: StreamTextOnFinishCallback<ToolSet>,
+    options?: OnChatMessageOptions
+  ) {
+    const throwError = (options?.body as { throwError?: boolean } | undefined)
+      ?.throwError;
+
+    if (throwError) {
+      const stream = new ReadableStream({
+        pull() {
+          throw new Error("Stream-level error");
+        }
+      });
+      return new Response(stream, {
+        headers: { "Content-Type": "text/plain" }
+      });
+    }
+
+    return new Response("Success response", {
+      headers: { "Content-Type": "text/plain" }
+    });
+  }
+
+  protected async onChatResponse(_result: ChatResponseResult) {
+    this._streamCompleted = true;
+    throw new Error("onChatResponse hook crashed");
+  }
+
+  getStreamCompleted(): boolean {
+    return this._streamCompleted;
+  }
+
+  getPersistedMessages(): ChatMessage[] {
+    return (
+      this.sql`select * from cf_ai_chat_agent_messages order by created_at` ||
+      []
+    ).map((row) => JSON.parse(row.message as string));
+  }
+}
+
+/**
+ * Test agent that calls saveMessages from inside onChatResponse.
+ * Uses a queue of messages to process sequentially — each onChatResponse
+ * picks the next item and calls saveMessages, relying on the framework's
+ * drain loop to fire onChatResponse again for the inner turn's result.
+ */
+export class ResponseSaveMessagesAgent extends AIChatAgent<Env> {
+  private _responseResults: ChatResponseResult[] = [];
+  private _messageQueue: string[] = [];
+
+  async onChatMessage(
+    _onFinish: StreamTextOnFinishCallback<ToolSet>,
+    _options?: OnChatMessageOptions
+  ) {
+    return new Response("Agent reply", {
+      headers: { "Content-Type": "text/plain" }
+    });
+  }
+
+  protected async onChatResponse(result: ChatResponseResult) {
+    this._responseResults.push(result);
+
+    if (this._messageQueue.length > 0) {
+      const text = this._messageQueue.shift()!;
+      const followUp: ChatMessage = {
+        id: `followup-${crypto.randomUUID()}`,
+        role: "user",
+        parts: [{ type: "text", text }]
+      };
+      await this.saveMessages([...this.messages, followUp]);
+    }
+  }
+
+  enqueueMessages(messages: string[]): void {
+    this._messageQueue.push(...messages);
+  }
+
+  getChatResponseResults(): ChatResponseResult[] {
+    return [...this._responseResults];
+  }
+
+  async waitForIdleForTest(): Promise<void> {
+    await (this as unknown as { waitForIdle(): Promise<void> }).waitForIdle();
+  }
+
+  getPersistedMessages(): ChatMessage[] {
+    return (
+      this.sql`select * from cf_ai_chat_agent_messages order by created_at` ||
+      []
+    ).map((row) => JSON.parse(row.message as string));
+  }
+}
+
+export class LatestMessageConcurrencyAgent extends SlowStreamAgent {
+  messageConcurrency = "latest" as const;
+}
+
+export class MergeMessageConcurrencyAgent extends SlowStreamAgent {
+  messageConcurrency = "merge" as const;
+}
+
+export class DropMessageConcurrencyAgent extends SlowStreamAgent {
+  messageConcurrency = "drop" as const;
+}
+
+export class DebounceMessageConcurrencyAgent extends SlowStreamAgent {
+  messageConcurrency = {
+    strategy: "debounce",
+    debounceMs: 80
+  } as const;
+}
+
+export class InvalidDebounceMessageConcurrencyAgent extends SlowStreamAgent {
+  messageConcurrency = {
+    strategy: "debounce",
+    debounceMs: Number.NaN
+  } as const;
+}
+
+export class MissingDebounceMessageConcurrencyAgent extends SlowStreamAgent {
+  messageConcurrency = {
+    strategy: "debounce"
+  } as const;
 }
 
 // Test agents for waitForMcpConnections config

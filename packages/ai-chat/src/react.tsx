@@ -378,6 +378,19 @@ export function useAgentChat<
    * or client-side execution.
    */
   addToolOutput: (opts: AddToolOutputOptions) => void;
+  /**
+   * Whether a server-initiated stream (e.g. from `saveMessages`,
+   * auto-continuation, or another tab) is currently active.
+   * This is independent of the AI SDK's `status` which only tracks
+   * client-initiated request/response cycles.
+   */
+  isServerStreaming: boolean;
+  /**
+   * Convenience flag: `true` when either the client-initiated stream
+   * (`status === "streaming"`) or a server-initiated stream is active.
+   * Use this for showing a universal streaming indicator.
+   */
+  isStreaming: boolean;
 } {
   const {
     agent,
@@ -450,10 +463,11 @@ export function useAgentChat<
   agentUrl.searchParams.delete("_pk");
   const agentUrlString = agentUrl.toString();
 
-  // we need to include agent.name in cache key to prevent collisions during agent switching.
-  // The URL may be stale between updateProperties() and reconnect(), but agent.name
-  // is updated synchronously, so each thread gets its own cache entry
-  const initialMessagesCacheKey = `${agentUrlString}|${agent.agent ?? ""}|${agent.name ?? ""}`;
+  // Build cache key from agent identity only (origin + pathname + agent + name).
+  // Query params like auth tokens change across page loads and must NOT
+  // bust the cache — otherwise Suspense re-triggers and breaks stream resume.
+  // See https://github.com/cloudflare/agents/issues/1223
+  const initialMessagesCacheKey = `${agentUrl.origin}${agentUrl.pathname}|${agent.agent ?? ""}|${agent.name ?? ""}`;
 
   // Keep a ref to always point to the latest agent instance.
   // Updated synchronously during render (not in useEffect) so the
@@ -970,6 +984,8 @@ export function useAgentChat<
     metadata?: Record<string, unknown>;
   } | null>(null);
 
+  const [isServerStreaming, setIsServerStreaming] = useState(false);
+
   /**
    * Flush the active stream's accumulated parts into React state.
    * Extracted as a helper so it can be called both during live streaming
@@ -1127,6 +1143,7 @@ export function useAgentChat<
             continuation: false,
             parts: []
           };
+          setIsServerStreaming(true);
           agentRef.current.send(
             JSON.stringify({
               type: MessageType.CF_AGENT_STREAM_RESUME_ACK,
@@ -1187,6 +1204,7 @@ export function useAgentChat<
               parts: existingParts,
               metadata: existingMetadata
             };
+            setIsServerStreaming(true);
           }
 
           const activeMsg = activeStreamRef.current;
@@ -1267,6 +1285,7 @@ export function useAgentChat<
               flushActiveStreamToMessages(activeMsg);
             }
             activeStreamRef.current = null;
+            setIsServerStreaming(false);
           } else if (data.replayComplete && activeMsg) {
             // Replay of stored chunks is complete but the stream is still
             // active (e.g. model is still thinking). Flush the accumulated
@@ -1291,6 +1310,7 @@ export function useAgentChat<
       agent.removeEventListener("message", onAgentMessage);
       // Clear active stream state on cleanup to prevent memory leak
       activeStreamRef.current = null;
+      setIsServerStreaming(false);
     };
   }, [
     agent,
@@ -1499,9 +1519,14 @@ export function useAgentChat<
     [sendToolOutputToServer, addToolResult]
   );
 
+  const isStreaming =
+    useChatHelpers.status === "streaming" || isServerStreaming;
+
   return {
     ...useChatHelpers,
     messages: messagesWithToolResults,
+    isServerStreaming,
+    isStreaming,
     /**
      * Provide output for a tool call. Use this for tools that require user interaction
      * or client-side execution.
