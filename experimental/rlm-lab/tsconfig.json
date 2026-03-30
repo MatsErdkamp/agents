@@ -1,0 +1,15 @@
+{
+  "extends": "agents/tsconfig",
+  "compilerOptions": {
+    "paths": {
+      "@cloudflare/modules": ["../../packages/modules/src/index.ts"],
+      "@cloudflare/modules/agents": [
+        "../../packages/modules/src/agents-entry.ts"
+      ],
+      "@cloudflare/modules/workers": [
+        "../../packages/modules/src/workers-entry.ts"
+      ]
+    }
+  },
+  "include": ["env.d.ts", "src"]
+}
