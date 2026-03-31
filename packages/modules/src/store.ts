@@ -233,6 +233,124 @@ export class SqliteModuleStore implements ModuleStore {
     ` as unknown as ModuleTrace[];
   }
 
+  async getFeedback(options: {
+    traceId?: string;
+    traceIds?: string[];
+    modulePath?: string;
+    limit?: number;
+  }): Promise<ModuleFeedback[]> {
+    this.ensureSchema();
+    const limit = options.limit ?? 100;
+
+    if (options.traceId) {
+      return this.sql`
+        SELECT
+          id,
+          trace_id as traceId,
+          score,
+          label,
+          comment,
+          created_at as createdAt
+        FROM module_feedback
+        WHERE trace_id = ${options.traceId}
+        ORDER BY created_at DESC
+        LIMIT ${limit}
+      ` as unknown as ModuleFeedback[];
+    }
+
+    if (options.traceIds?.length) {
+      const rows = await Promise.all(
+        options.traceIds.map((traceId) =>
+          this.getFeedback({
+            traceId,
+            limit
+          })
+        )
+      );
+
+      return rows
+        .flat()
+        .sort((left, right) => right.createdAt - left.createdAt)
+        .slice(0, limit);
+    }
+
+    if (options.modulePath) {
+      return this.sql`
+        SELECT
+          feedback.id as id,
+          feedback.trace_id as traceId,
+          feedback.score as score,
+          feedback.label as label,
+          feedback.comment as comment,
+          feedback.created_at as createdAt
+        FROM module_feedback feedback
+        INNER JOIN module_traces traces
+          ON traces.trace_id = feedback.trace_id
+        WHERE traces.module_path = ${options.modulePath}
+        ORDER BY feedback.created_at DESC
+        LIMIT ${limit}
+      ` as unknown as ModuleFeedback[];
+    }
+
+    return [];
+  }
+
+  async getTraceBundle(
+    traceId: string,
+    options?: { eventLimit?: number; feedbackLimit?: number }
+  ) {
+    this.ensureSchema();
+    const trace = await this.getTraceById(traceId);
+    if (!trace) {
+      return null;
+    }
+
+    const [events, feedback] = await Promise.all([
+      this.getTraceEvents(traceId, {
+        limit: options?.eventLimit
+      }),
+      this.getFeedback({
+        traceId,
+        limit: options?.feedbackLimit
+      })
+    ]);
+
+    return {
+      trace,
+      events,
+      feedback
+    };
+  }
+
+  async listModulePaths(options?: {
+    prefix?: string;
+    limit?: number;
+  }): Promise<string[]> {
+    this.ensureSchema();
+    const limit = options?.limit ?? 100;
+
+    if (options?.prefix) {
+      const rows = this.sql`
+        SELECT DISTINCT module_path as modulePath
+        FROM module_traces
+        WHERE module_path LIKE ${`${options.prefix}%`}
+        ORDER BY module_path ASC
+        LIMIT ${limit}
+      ` as Array<{ modulePath: string }>;
+
+      return rows.map((row) => row.modulePath);
+    }
+
+    const rows = this.sql`
+      SELECT DISTINCT module_path as modulePath
+      FROM module_traces
+      ORDER BY module_path ASC
+      LIMIT ${limit}
+    ` as Array<{ modulePath: string }>;
+
+    return rows.map((row) => row.modulePath);
+  }
+
   private ensureSchema() {
     if (this.#ready) {
       return;
@@ -336,6 +454,38 @@ export class SqliteModuleStore implements ModuleStore {
         ${trace.finishedAt}
       )
     `;
+  }
+
+  private async getTraceById(traceId: string): Promise<ModuleTrace | null> {
+    const [trace] = this.sql`
+      SELECT
+        trace_id as traceId,
+        module_path as modulePath,
+        signature_name as signatureName,
+        module_kind as moduleKind,
+        status,
+        input_json as inputJson,
+        output_json as outputJson,
+        input_hash as inputHash,
+        output_hash as outputHash,
+        model_id as modelId,
+        adapter_name as adapterName,
+        instruction_version as instructionVersion,
+        input_field_descriptions_version as inputFieldDescriptionsVersion,
+        output_field_descriptions_version as outputFieldDescriptionsVersion,
+        context_version as contextVersion,
+        demo_version as demoVersion,
+        usage_json as usageJson,
+        latency_ms as latencyMs,
+        error_json as errorJson,
+        created_at as createdAt,
+        finished_at as finishedAt
+      FROM module_traces
+      WHERE trace_id = ${traceId}
+      LIMIT 1
+    ` as unknown as ModuleTrace[];
+
+    return trace ?? null;
   }
 
   private ensureDescriptionVersionColumns() {

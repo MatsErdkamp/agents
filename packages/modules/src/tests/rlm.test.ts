@@ -195,7 +195,11 @@ describe("shell-backed workers runtime", () => {
     expect(result.scratch).toEqual({ seen: true });
     expect(result.submitted).toEqual({ answer: "ok" });
     expect(result.logs).toEqual(["sandbox complete"]);
-    expect(executor.capturedProviderNames).toEqual(["state", "rlmtools"]);
+    expect(executor.capturedProviderNames).toEqual([
+      "state",
+      "rlmtools",
+      "r2text"
+    ]);
   });
 
   it("surfaces query budget errors through the runtime", async () => {

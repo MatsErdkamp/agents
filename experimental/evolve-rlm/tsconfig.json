@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "jsx": "react-jsx",
+    "skipLibCheck": true,
+    "ignoreDeprecations": "6.0",
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "types": ["vite/client", "@cloudflare/workers-types"],
+    "baseUrl": ".",
+    "paths": {
+      "agents": ["../../packages/agents/dist/index.d.ts"],
+      "agents/react": ["../../packages/agents/dist/react.d.ts"],
+      "agents/vite": ["../../packages/agents/dist/vite.d.ts"],
+      "@cloudflare/evolve": ["../../packages/evolve/src/index.ts"],
+      "@cloudflare/modules": ["../../packages/modules/src/index.ts"],
+      "@cloudflare/modules/agents": ["../../packages/modules/src/agents-entry.ts"],
+      "@cloudflare/modules/workers": ["../../packages/modules/src/workers-entry.ts"],
+      "@cloudflare/shell": ["../../packages/shell/src/index.ts"],
+      "@cloudflare/shell/workers": ["../../packages/shell/src/workers.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "env.d.ts", "vite.config.ts"]
+}

@@ -3,6 +3,7 @@ import type { Signature } from "./signature";
 import type {
   ModuleASI,
   ModuleArtifact,
+  ModuleArtifactOverlay,
   ModuleContext,
   ModuleTrace,
   ModuleTraceEvent,
@@ -53,6 +54,14 @@ export abstract class Module<I extends z.ZodTypeAny, O extends z.ZodTypeAny> {
     context: ModuleContext,
     rawInput: z.input<I>
   ): Promise<z.output<O>> {
+    const result = await this.invokeWithTrace(context, rawInput);
+    return result.output;
+  }
+
+  async invokeWithTrace(
+    context: ModuleContext,
+    rawInput: z.input<I>
+  ): Promise<{ output: z.output<O>; traceId: string; modulePath: string }> {
     const traceId = crypto.randomUUID();
     const modulePath = this.resolvePath();
     const createdAt = Date.now();
@@ -160,7 +169,11 @@ export abstract class Module<I extends z.ZodTypeAny, O extends z.ZodTypeAny> {
         status
       });
 
-      return parsedOutput;
+      return {
+        output: parsedOutput,
+        traceId,
+        modulePath
+      };
     } catch (error) {
       status = isValidationError(error) ? "validation_error" : "error";
       const errorJson = serializeError(error);
@@ -280,7 +293,9 @@ async function resolveModuleConfig<
   };
 
   const store = context.store;
-  if (!store) {
+  const overlay = context.artifacts?.[modulePath];
+
+  if (!store && !overlay) {
     return baseConfig;
   }
 
@@ -288,28 +303,52 @@ async function resolveModuleConfig<
     instructionsArtifact,
     inputDescriptionsArtifact,
     outputDescriptionsArtifact
-  ] = await Promise.all([
-    store.getActiveArtifact(modulePath, "instructions"),
-    store.getActiveArtifact(modulePath, "input-field-descriptions"),
-    store.getActiveArtifact(modulePath, "output-field-descriptions")
-  ]);
+  ] = store
+    ? await Promise.all([
+        store.getActiveArtifact(modulePath, "instructions"),
+        store.getActiveArtifact(modulePath, "input-field-descriptions"),
+        store.getActiveArtifact(modulePath, "output-field-descriptions")
+      ])
+    : [null, null, null];
+
+  const overlaidInstructions = parseOverlayContent<string>(
+    overlay,
+    "instructions"
+  );
+  const overlaidInputFieldDescriptions = parseOverlayContent<
+    Record<string, string>
+  >(overlay, "input-field-descriptions");
+  const overlaidOutputFieldDescriptions = parseOverlayContent<
+    Record<string, string>
+  >(overlay, "output-field-descriptions");
 
   return {
     instructions:
+      overlaidInstructions ??
       parseArtifactContent<string>(instructionsArtifact) ??
       baseConfig.instructions,
-    instructionVersion: instructionsArtifact?.version ?? "default",
+    instructionVersion:
+      overlay?.instructions?.version ??
+      instructionsArtifact?.version ??
+      "default",
     inputFieldDescriptions:
+      overlaidInputFieldDescriptions ??
       parseArtifactContent<Record<string, string>>(inputDescriptionsArtifact) ??
       baseConfig.inputFieldDescriptions,
     inputFieldDescriptionsVersion:
-      inputDescriptionsArtifact?.version ?? "default",
+      overlay?.["input-field-descriptions"]?.version ??
+      inputDescriptionsArtifact?.version ??
+      "default",
     outputFieldDescriptions:
+      overlaidOutputFieldDescriptions ??
       parseArtifactContent<Record<string, string>>(
         outputDescriptionsArtifact
-      ) ?? baseConfig.outputFieldDescriptions,
+      ) ??
+      baseConfig.outputFieldDescriptions,
     outputFieldDescriptionsVersion:
-      outputDescriptionsArtifact?.version ?? "default"
+      overlay?.["output-field-descriptions"]?.version ??
+      outputDescriptionsArtifact?.version ??
+      "default"
   };
 }
 
@@ -320,6 +359,22 @@ function parseArtifactContent<T>(artifact: ModuleArtifact | null): T | null {
 
   try {
     return JSON.parse(artifact.contentJson) as T;
+  } catch {
+    return null;
+  }
+}
+
+function parseOverlayContent<T>(
+  overlay: ModuleArtifactOverlay | undefined,
+  artifactType: keyof ModuleArtifactOverlay
+): T | null {
+  const value = overlay?.[artifactType];
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(value.contentJson) as T;
   } catch {
     return null;
   }

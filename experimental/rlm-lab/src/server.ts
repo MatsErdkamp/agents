@@ -1,6 +1,10 @@
 import { generateText, type LanguageModel } from "ai";
 import { Agent, callable, routeAgentRequest } from "agents";
 import {
+  SqliteEvolveStore,
+  createAgentEvolveHelpers
+} from "../../../packages/evolve/src/index";
+import {
   RLM,
   SqliteModuleStore,
   signature,
@@ -140,13 +144,37 @@ export class RlmLabAgent extends Agent<Env> {
     );
   }
 
-  private getModuleContext(): ModuleContext {
-    return {
-      model: this.getModel(),
+  private getEvolveStore() {
+    return new SqliteEvolveStore(
+      (
+        strings: TemplateStringsArray,
+        ...values: Array<string | number | boolean | null>
+      ) => this.sql(strings, ...values)
+    );
+  }
+
+  private getEvolveHelpers() {
+    return createAgentEvolveHelpers({
       store: this.getModuleStore(),
+      evolveStore: this.getEvolveStore(),
+      emit: (type: string, payload?: Record<string, unknown>) => {
+        this.broadcast(
+          JSON.stringify({
+            type: "module-event",
+            eventType: type,
+            payload: payload ?? null
+          })
+        );
+      }
+    });
+  }
+
+  private getModuleContext(): ModuleContext {
+    return this.getEvolveHelpers().createModuleContext({
+      model: this.getModel(),
       host: this,
       maxOutputTokens: 4096
-    };
+    });
   }
 
   @callable()
@@ -179,6 +207,21 @@ export class RlmLabAgent extends Agent<Env> {
         `${INVESTIGATE_PATH}.extract`
       ])
     };
+  }
+
+  @callable()
+  async saveTraceFeedback(input: {
+    traceId: string;
+    score?: number | null;
+    label?: string | null;
+    comment?: string | null;
+  }) {
+    return this.getEvolveHelpers().saveTraceFeedback(input);
+  }
+
+  @callable()
+  async getOptimizationRuns() {
+    return this.getEvolveHelpers().listRuns(INVESTIGATE_PATH, 10);
   }
 
   private async getTraceSummaries(

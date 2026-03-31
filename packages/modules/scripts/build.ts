@@ -5,18 +5,18 @@ async function main() {
   await build({
     clean: true,
     dts: true,
-    target: "es2021",
-    entry: ["src/index.ts", "src/workers-entry.ts", "src/agents-entry.ts"],
+    entry: ["src/index.ts", "src/agents.ts", "src/workers.ts"],
     deps: {
       skipNodeModulesBundle: true,
-      neverBundle: ["cloudflare:workers"]
+      neverBundle: ["cloudflare:workers", "agents"]
     },
     format: "esm",
     sourcemap: true,
     fixedExtension: false
   });
 
-  execSync("oxfmt --write './dist/**/*.d.ts'");
+  execSync("oxfmt --write ./dist/*.d.ts");
+
   process.exit(0);
 }
 

@@ -1,4 +1,17 @@
 {
-  "extends": "agents/tsconfig",
-  "exclude": ["src/tests/**/*.ts"]
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "ignoreDeprecations": "6.0",
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@cloudflare/modules": ["../modules/src/index.ts"]
+    }
+  },
+  "exclude": ["src/tests/**/*.ts", "e2e/**/*.ts"]
 }

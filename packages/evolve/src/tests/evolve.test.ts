@@ -2,12 +2,20 @@ import type { LanguageModel } from "ai";
 import { describe, expect, it } from "vitest";
 import {
   Module,
+  type ModuleArtifact,
   signature,
+  type ModuleFeedback,
   type ModuleStore,
-  type ModuleTrace
+  type ModuleTrace,
+  type ModuleTraceEvent
 } from "@cloudflare/modules";
 import { z } from "zod";
-import { Evolve, TraceReviewStrategy, loadOptimizationContext } from "../index";
+import {
+  Evolve,
+  ModuleTraceAdapter,
+  TraceReviewStrategy,
+  loadOptimizationContext
+} from "../index";
 
 class EchoModule extends Module<
   z.ZodObject<{ query: z.ZodString }>,
@@ -32,6 +40,87 @@ class EchoModule extends Module<
     input: { query: string }
   ): Promise<{ answer: string }> {
     return { answer: input.query };
+  }
+}
+
+class InstructionAwareModule extends Module<
+  z.ZodObject<{ problem: z.ZodString }>,
+  z.ZodObject<{ answer: z.ZodString }>
+> {
+  constructor() {
+    super(
+      signature("solve")
+        .withInput(z.object({ problem: z.string() }))
+        .withOutput(z.object({ answer: z.string() }))
+        .withInstructions('Solve the problem, but always output "0".')
+    );
+  }
+
+  protected override async forward(
+    context: {
+      resolved: {
+        instructions?: string;
+      };
+    },
+    input: { problem: string }
+  ): Promise<{ answer: string }> {
+    const improved =
+      context.resolved.instructions?.includes(
+        "Return the exact numeric answer"
+      ) ?? false;
+
+    if (!improved) {
+      return { answer: "0" };
+    }
+
+    switch (input.problem) {
+      case "What is 2 + 2?":
+        return { answer: "4" };
+      case "What is 3 * 3?":
+        return { answer: "9" };
+      default:
+        return { answer: "0" };
+    }
+  }
+}
+
+class FieldDescriptionAwareModule extends Module<
+  z.ZodObject<{ problem: z.ZodString }>,
+  z.ZodObject<{ answer: z.ZodString }>
+> {
+  constructor() {
+    super(
+      signature("describe")
+        .withInput(z.object({ problem: z.string() }))
+        .withOutput(z.object({ answer: z.string() }))
+    );
+  }
+
+  protected override async forward(
+    context: {
+      resolved: {
+        outputFieldDescriptions: Record<string, string>;
+      };
+    },
+    input: { problem: string }
+  ): Promise<{ answer: string }> {
+    const improved =
+      context.resolved.outputFieldDescriptions.answer?.includes(
+        "exact numeric answer"
+      ) ?? false;
+
+    if (!improved) {
+      return { answer: "0" };
+    }
+
+    switch (input.problem) {
+      case "What is 5 + 5?":
+        return { answer: "10" };
+      case "What is 8 - 3?":
+        return { answer: "5" };
+      default:
+        return { answer: "0" };
+    }
   }
 }
 
@@ -182,7 +271,7 @@ describe("evolve", () => {
       createdAt: number;
       isActive: boolean;
     }> = [];
-    const store = createStore([], [], artifacts);
+    const store = createStore([], [], [], artifacts);
     const evolve = new Evolve({
       strategies: [
         new TraceReviewStrategy({
@@ -256,6 +345,235 @@ describe("evolve", () => {
     expect(suggestion.confidence).toBe("low");
     expect(suggestion.summary).toContain("heuristically");
   });
+
+  it("builds reflective examples from traces, ASI, and feedback", async () => {
+    const store = createStore([createStoreTrace()], createStoreEvents(), [
+      {
+        id: "feedback-1",
+        traceId: "trace-1",
+        score: 0,
+        label: "incorrect",
+        comment: JSON.stringify({ expectedAnswer: "4" }),
+        createdAt: 4
+      }
+    ]);
+    const adapter = new ModuleTraceAdapter();
+    const module = new EchoModule();
+
+    const [example] = await adapter.loadExamples({
+      module,
+      store,
+      modulePath: "echo"
+    });
+
+    expect(example.traceId).toBe("trace-1");
+    expect(example.asi[0]?.message).toContain("missing orderId");
+    expect(example.feedback[0]?.label).toBe("incorrect");
+    expect(adapter.renderExample(example)).toContain("Feedback");
+  });
+
+  it("runs the GEPA optimize loop and activates the winning instructions", async () => {
+    const module = new InstructionAwareModule();
+    const traces: ModuleTrace[] = [];
+    const events: ModuleTraceEvent[] = [];
+    const feedback: ModuleFeedback[] = [];
+    const artifacts: ModuleArtifact[] = [];
+    const store = createStore(traces, events, feedback, artifacts);
+
+    const benchmark = [
+      { problem: "What is 2 + 2?", expected: "4" },
+      { problem: "What is 3 * 3?", expected: "9" }
+    ];
+
+    for (const [index, example] of benchmark.entries()) {
+      const run = await module.invokeWithTrace(
+        {
+          model: "test:model" as LanguageModel,
+          store
+        },
+        { problem: example.problem }
+      );
+      await store.appendTraceEvent({
+        eventId: `asi-${index}`,
+        traceId: run.traceId,
+        seq: index + 1,
+        visibility: "asi",
+        kind: "wrong_answer",
+        level: "warn",
+        message: `Expected ${example.expected} but got ${run.output.answer}`,
+        payloadJson: JSON.stringify({ expectedAnswer: example.expected }),
+        createdAt: Date.now()
+      });
+      await store.saveFeedback({
+        id: `feedback-${index}`,
+        traceId: run.traceId,
+        score: run.output.answer === example.expected ? 1 : 0,
+        label: run.output.answer === example.expected ? "correct" : "incorrect",
+        comment: JSON.stringify({ expectedAnswer: example.expected }),
+        createdAt: Date.now()
+      });
+    }
+
+    const evolve = new Evolve({
+      generateText: async () =>
+        ({
+          output: {
+            summary: "Remove the forced zero behavior and answer exactly.",
+            instructions:
+              "Solve the math problem carefully. Return the exact numeric answer in the answer field.",
+            rationale: [
+              "The replay data shows the current instructions force the wrong constant answer."
+            ]
+          }
+        }) as Awaited<ReturnType<typeof import("ai").generateText>>
+    });
+    const adapter = new ModuleTraceAdapter({
+      score: ({ example, output }) => {
+        const expected = JSON.parse(example.feedback[0]?.comment ?? "{}") as {
+          expectedAnswer?: string;
+        };
+        return output != null &&
+          typeof output === "object" &&
+          "answer" in output &&
+          (output as { answer: string }).answer === expected.expectedAnswer
+          ? 1
+          : 0;
+      }
+    });
+
+    const result = await evolve.optimize({
+      module,
+      store,
+      reflectionModel: "test:reflection" as LanguageModel,
+      executionContext: {
+        model: "test:execution" as LanguageModel
+      },
+      adapter,
+      activate: true,
+      maxIterations: 1,
+      minibatchSize: 2,
+      validationSplit: 0.5
+    });
+
+    expect(result.candidates.length).toBeGreaterThan(1);
+    expect(result.seedCandidate.validationScore).toBe(0);
+    expect(result.bestCandidate.validationScore).toBe(1);
+    expect(result.bestCandidate.instructions).toContain("exact numeric answer");
+    expect(result.appliedArtifacts.instructions).toBeTruthy();
+    expect(
+      await store.getActiveArtifact("solve", "instructions")
+    ).toMatchObject({
+      isActive: true
+    });
+  });
+
+  it("optimizes output field descriptions as text parameters", async () => {
+    const module = new FieldDescriptionAwareModule();
+    const traces: ModuleTrace[] = [];
+    const events: ModuleTraceEvent[] = [];
+    const feedback: ModuleFeedback[] = [];
+    const artifacts: ModuleArtifact[] = [];
+    const store = createStore(traces, events, feedback, artifacts);
+
+    const benchmark = [
+      { problem: "What is 5 + 5?", expected: "10" },
+      { problem: "What is 8 - 3?", expected: "5" }
+    ];
+
+    for (const [index, example] of benchmark.entries()) {
+      const run = await module.invokeWithTrace(
+        {
+          model: "test:model" as LanguageModel,
+          store
+        },
+        { problem: example.problem }
+      );
+      await store.appendTraceEvent({
+        eventId: `field-asi-${index}`,
+        traceId: run.traceId,
+        seq: index + 1,
+        visibility: "asi",
+        kind: "ambiguous_output_field",
+        level: "warn",
+        message: `The answer field should contain the exact numeric answer ${example.expected}.`,
+        payloadJson: JSON.stringify({ expectedAnswer: example.expected }),
+        createdAt: Date.now()
+      });
+      await store.saveFeedback({
+        id: `field-feedback-${index}`,
+        traceId: run.traceId,
+        score: run.output.answer === example.expected ? 1 : 0,
+        label: run.output.answer === example.expected ? "correct" : "incorrect",
+        comment: JSON.stringify({ expectedAnswer: example.expected }),
+        createdAt: Date.now()
+      });
+    }
+
+    const evolve = new Evolve({
+      generateText: async () =>
+        ({
+          output: {
+            summary: "Clarify the output field contract.",
+            instructions: "The exact numeric answer as a string.",
+            rationale: [
+              "The examples show the answer field description is too weak to guide the module."
+            ]
+          }
+        }) as Awaited<ReturnType<typeof import("ai").generateText>>
+    });
+    const adapter = new ModuleTraceAdapter({
+      score: ({ example, output }) => {
+        const expected = JSON.parse(example.feedback[0]?.comment ?? "{}") as {
+          expectedAnswer?: string;
+        };
+        return output != null &&
+          typeof output === "object" &&
+          "answer" in output &&
+          (output as { answer: string }).answer === expected.expectedAnswer
+          ? 1
+          : 0;
+      }
+    });
+
+    const result = await evolve.optimize({
+      module,
+      store,
+      reflectionModel: "test:reflection" as LanguageModel,
+      executionContext: {
+        model: "test:execution" as LanguageModel
+      },
+      adapter,
+      activate: true,
+      maxIterations: 1,
+      minibatchSize: 2,
+      validationSplit: 0.5,
+      componentSelector: {
+        nextComponent({ components }) {
+          const component = components.find(
+            (entry) => entry.id === "output-field-description:describe:answer"
+          );
+          if (!component) {
+            throw new Error("Missing output field description component.");
+          }
+          return component;
+        }
+      }
+    });
+
+    expect(result.bestCandidate.validationScore).toBe(1);
+    expect(result.bestCandidate.component).toBe(
+      "output-field-description:describe:answer"
+    );
+    expect(
+      result.bestCandidate.parameters[
+        "output-field-description:describe:answer"
+      ]
+    ).toContain("exact numeric answer");
+    expect(result.appliedArtifacts["output-field-descriptions"]).toBeTruthy();
+    expect(
+      await store.getActiveArtifact("describe", "output-field-descriptions")
+    ).toMatchObject({ isActive: true });
+  });
 });
 
 function createStore(
@@ -297,6 +615,7 @@ function createStore(
       createdAt: 2
     }
   ],
+  feedback: ModuleFeedback[] = [],
   artifacts: Array<{
     artifactId: string;
     modulePath: string;
@@ -308,10 +627,21 @@ function createStore(
   }> = []
 ): ModuleStore {
   return {
-    async beginTrace() {},
-    async finishTrace() {},
-    async appendTraceEvent() {},
-    async saveFeedback() {},
+    async beginTrace(trace) {
+      traces.push(trace);
+    },
+    async finishTrace(traceId, update) {
+      const index = traces.findIndex((trace) => trace.traceId === traceId);
+      if (index >= 0) {
+        traces[index] = { ...traces[index], ...update };
+      }
+    },
+    async appendTraceEvent(event) {
+      events.push(event);
+    },
+    async saveFeedback(entry) {
+      feedback.push(entry);
+    },
     async saveArtifact(artifact) {
       artifacts.push(artifact);
     },
@@ -340,6 +670,43 @@ function createStore(
     },
     async getTraceEvents(traceId) {
       return events.filter((event) => event.traceId === traceId);
+    },
+    async getFeedback(options) {
+      if (options.traceId) {
+        return feedback.filter((entry) => entry.traceId === options.traceId);
+      }
+
+      if (options.traceIds?.length) {
+        return feedback.filter((entry) =>
+          options.traceIds?.includes(entry.traceId)
+        );
+      }
+
+      if (options.modulePath) {
+        const traceIds = new Set(
+          traces
+            .filter((trace) => trace.modulePath === options.modulePath)
+            .map((trace) => trace.traceId)
+        );
+        return feedback.filter((entry) => traceIds.has(entry.traceId));
+      }
+
+      return feedback;
+    },
+    async getTraceBundle(traceId) {
+      const trace = traces.find((entry) => entry.traceId === traceId);
+      if (!trace) {
+        return null;
+      }
+
+      return {
+        trace,
+        events: events.filter((event) => event.traceId === traceId),
+        feedback: feedback.filter((entry) => entry.traceId === traceId)
+      };
+    },
+    async listModulePaths() {
+      return [...new Set(traces.map((trace) => trace.modulePath))];
     }
   };
 }

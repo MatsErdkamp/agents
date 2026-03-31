@@ -1,61 +1,42 @@
 # Experimental Evolve
 
-An experimental demo of the new `@cloudflare/evolve` surface.
+An experimental GEPA workbench for `@cloudflare/evolve`.
 
-It shows the smallest useful optimization loop:
+It turns the new optimizer into a concrete UI:
 
-1. run a composed module
-2. persist traces and ASI
-3. ask `Evolve` for a suggestion based on recent traces
+1. seed a local benchmark with intentionally bad instructions
+2. inspect persisted traces, ASI, and feedback
+3. run GEPA over those stored examples
+4. inspect candidate lineage, archive rank, and the activated winner
 
-## What this demonstrates
+## What It Demonstrates
 
-### 1. Trace-driven review
+- `@cloudflare/modules` trace persistence and artifact activation
+- `@cloudflare/evolve` replay-based optimization with `ModuleTraceAdapter`
+- `SqliteEvolveStore` run history inside an Agents SDK durable object
+- a frontend that makes the optimizer state inspectable instead of hiding it in logs
 
-The demo uses a `SupportWorkflowModule` built from two child `Predict` nodes.
-Each invocation writes module traces into SQLite using `SqliteModuleStore`.
-
-### 2. Barebones optimization strategy
-
-The first `Evolve` strategy is intentionally narrow:
-
-- load recent traces and trace events
-- serialize current instructions and schemas
-- ask a model for:
-  - suggested instructions
-  - signature guidance
-  - rationale
-  - evidence
-  - confidence
-
-It does not mutate the module. It only returns suggestions.
-
-### 3. A clean package split
-
-The example uses:
-
-- `@cloudflare/modules` for execution
-- `@cloudflare/evolve` for optimization
-- `@cloudflare/think` only as the host runtime
-
-## Running it
+## Running It
 
 ```bash
 npm install
 npm start
 ```
 
-No external API keys are needed. The example uses Workers AI through the `AI`
-binding in `wrangler.jsonc`.
+No external API keys are required. The experiment uses Workers AI through the
+`AI` binding in [`wrangler.jsonc`](./wrangler.jsonc).
 
-## Suggested flow
+## Suggested Flow
 
-1. Run the support workflow with a few different inputs.
-2. Open the trace panel and confirm traces/ASI are being written.
-3. Click “Ask evolve for suggestion”.
-4. Inspect the returned instruction change proposal and evidence.
+1. Click `Seed Benchmark` to persist a bad baseline run across the fixture set.
+2. Inspect the latest example cards to confirm ASI and feedback are present.
+3. Click `Run GEPA` and wait for the optimizer to finish.
+4. Compare seed vs best score, browse the candidate pool, and confirm the winner
+   was activated into the module artifacts.
 
-## Related examples
+## Related Code
 
-- [`modules`](../modules) for the lower-level module runtime demo
-- [`assistant`](../../examples/assistant) for a full conversational `Think` host
+- [`src/server.ts`](./src/server.ts) for the benchmark module, GEPA run loop, and persisted dashboard state
+- [`src/client.tsx`](./src/client.tsx) for the optimization UI
+- [`../../packages/evolve/src/index.ts`](../../packages/evolve/src/index.ts) for the optimizer implementation
+- [`../../packages/modules/src/module.ts`](../../packages/modules/src/module.ts) for replay overlays and trace-returning invocation

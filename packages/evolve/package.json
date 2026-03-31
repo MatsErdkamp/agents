@@ -15,7 +15,14 @@
     "url": "https://github.com/cloudflare/agents/issues"
   },
   "dependencies": {
-    "@cloudflare/modules": "*"
+    "@cloudflare/modules": "workspace:*"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "ai": "^6.0.141",
+    "workers-ai-provider": "^3.1.8",
+    "wrangler": "^4.78.0",
+    "zod": "^4.3.6"
   },
   "peerDependencies": {
     "ai": "^6.0.0",
@@ -30,6 +37,7 @@
   "files": ["dist", "README.md"],
   "scripts": {
     "build": "tsx ./scripts/build.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "npx playwright test --config e2e/playwright.config.ts"
   }
 }

@@ -10,7 +10,9 @@ import {
   signature
 } from "..";
 import type {
+  ModuleArtifact,
   ModuleContext,
+  ModuleFeedback,
   ModuleStore,
   ModuleTrace,
   ModuleTraceEvent
@@ -285,6 +287,69 @@ describe("predict invocation and tracing", () => {
     expect(
       events.some((event) => event.kind === "output_validation_failed")
     ).toBe(true);
+  });
+
+  it("returns trace metadata and honors overlay instructions during replay", async () => {
+    const traces: ModuleTrace[] = [];
+    const events: ModuleTraceEvent[] = [];
+    const artifacts: ModuleArtifact[] = [
+      {
+        artifactId: "artifact-1",
+        modulePath: "classifyQuery",
+        artifactType: "instructions",
+        version: "live-v1",
+        contentJson: JSON.stringify("Use the live store instructions."),
+        createdAt: 1,
+        isActive: true
+      }
+    ];
+    const store = createStore(traces, events, [], artifacts);
+    let capturedSystem: string | undefined;
+
+    const sig = signature("classifyQuery")
+      .withInput(z.object({ query: z.string() }))
+      .withOutput(z.object({ category: z.string() }))
+      .withInstructions("Use the default instructions.");
+
+    const predict = new Predict(sig, {
+      adapter: new AISDKGenerateTextAdapter({
+        async generateText(options) {
+          capturedSystem = options.system;
+          return createGenerateTextResult({ category: "refund" });
+        }
+      })
+    });
+
+    const result = await predict.invokeWithTrace(
+      {
+        model: "test:model" as LanguageModel,
+        store,
+        artifacts: {
+          classifyQuery: {
+            instructions: {
+              contentJson: JSON.stringify(
+                "Use the temporary overlay instructions."
+              ),
+              version: "overlay-v1"
+            }
+          }
+        }
+      },
+      { query: "refund me" }
+    );
+
+    expect(result.output).toEqual({ category: "refund" });
+    expect(result.modulePath).toBe("classifyQuery");
+    expect(result.traceId).toBeTruthy();
+    expect(capturedSystem).toContain("temporary overlay instructions");
+    expect(capturedSystem).not.toContain("live store instructions");
+    expect(
+      artifacts.find((artifact) => artifact.artifactId === "artifact-1")
+    ).toMatchObject({
+      version: "live-v1",
+      isActive: true
+    });
+    expect(traces[0].instructionVersion).toBe("overlay-v1");
   });
 });
 
@@ -675,7 +740,9 @@ describe("sqlite module store", () => {
 
 function createStore(
   traces: ModuleTrace[],
-  events: ModuleTraceEvent[]
+  events: ModuleTraceEvent[],
+  feedback: ModuleFeedback[] = [],
+  artifacts: ModuleArtifact[] = []
 ): ModuleStore {
   return {
     async beginTrace(trace) {
@@ -688,17 +755,74 @@ function createStore(
     async appendTraceEvent(event) {
       events.push(event);
     },
-    async saveFeedback() {},
-    async saveArtifact() {},
-    async getActiveArtifact() {
-      return null;
+    async saveFeedback(entry) {
+      feedback.push(entry);
     },
-    async activateArtifact() {},
+    async saveArtifact(artifact) {
+      artifacts.push(artifact);
+    },
+    async getActiveArtifact(modulePath, artifactType) {
+      return (
+        artifacts.find(
+          (artifact) =>
+            artifact.modulePath === modulePath &&
+            artifact.artifactType === artifactType &&
+            artifact.isActive
+        ) ?? null
+      );
+    },
+    async activateArtifact(modulePath, artifactType, artifactId) {
+      for (const artifact of artifacts) {
+        if (
+          artifact.modulePath === modulePath &&
+          artifact.artifactType === artifactType
+        ) {
+          artifact.isActive = artifact.artifactId === artifactId;
+        }
+      }
+    },
     async getTraceEvents(traceId) {
       return events.filter((event) => event.traceId === traceId);
     },
     async getTraces(modulePath) {
       return traces.filter((trace) => trace.modulePath === modulePath);
+    },
+    async getFeedback(options) {
+      if (options.traceId) {
+        return feedback.filter((entry) => entry.traceId === options.traceId);
+      }
+
+      if (options.traceIds?.length) {
+        return feedback.filter((entry) =>
+          options.traceIds?.includes(entry.traceId)
+        );
+      }
+
+      if (options.modulePath) {
+        const traceIds = new Set(
+          traces
+            .filter((trace) => trace.modulePath === options.modulePath)
+            .map((trace) => trace.traceId)
+        );
+        return feedback.filter((entry) => traceIds.has(entry.traceId));
+      }
+
+      return feedback;
+    },
+    async getTraceBundle(traceId) {
+      const trace = traces.find((entry) => entry.traceId === traceId);
+      if (!trace) {
+        return null;
+      }
+
+      return {
+        trace,
+        events: events.filter((event) => event.traceId === traceId),
+        feedback: feedback.filter((entry) => entry.traceId === traceId)
+      };
+    },
+    async listModulePaths() {
+      return [...new Set(traces.map((trace) => trace.modulePath))];
     }
   };
 }

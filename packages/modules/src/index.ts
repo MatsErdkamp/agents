@@ -20,12 +20,17 @@ export {
 } from "./media";
 export type {
   ModuleArtifact,
+  ModuleArtifactOverlay,
+  ModuleArtifactOverlayMap,
+  ModuleArtifactOverlayValue,
   ModuleArtifactType,
   ModuleASI,
   ModuleContext,
   ModuleFeedback,
+  ModuleFeedbackQuery,
   ModuleStore,
   ModuleTrace,
+  ModuleTraceBundle,
   ModuleTraceEvent,
   ModuleTraceStatus,
   TraceVisibility

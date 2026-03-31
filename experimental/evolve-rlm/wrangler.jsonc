@@ -11,17 +11,24 @@
   "durable_objects": {
     "bindings": [
       {
-        "class_name": "EvolveExampleAgent",
-        "name": "EvolveExampleAgent"
+        "class_name": "EvolveRlmAgent",
+        "name": "EvolveRlmAgent"
       }
     ]
   },
   "main": "src/server.ts",
   "migrations": [
     {
-      "new_sqlite_classes": ["EvolveExampleAgent"],
+      "new_sqlite_classes": ["EvolveRlmAgent"],
       "tag": "v1"
     }
   ],
-  "name": "evolve-experimental"
+  "r2_buckets": [
+    {
+      "binding": "RLM_ARTIFACTS",
+      "bucket_name": "rlm-lab-artifacts"
+    }
+  ],
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "name": "evolve-rlm-experimental"
 }

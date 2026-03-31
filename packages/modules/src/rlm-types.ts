@@ -2,10 +2,10 @@ import type { PredictAdapter } from "./adapter";
 
 export type RLMResourceKind =
   | "text"
-  | "r2-text"
   | "json"
   | "ndjson"
   | "binary"
+  | "r2-text"
   | "url"
   | "input-index";
 

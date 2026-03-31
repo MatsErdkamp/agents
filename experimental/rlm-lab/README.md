@@ -15,6 +15,7 @@ codemode sandbox.
 - persistent `scratch` state across steps
 - semantic `query()` and `queryBatch()` powered by subagents
 - recent trace summaries and root trace event inspection in the UI
+- evolve helper wiring for trace feedback and optimization run summaries
 
 ## Running it
 
@@ -38,5 +39,6 @@ The experiment uses Workers AI via the `AI` binding and requires the
 ## Related code
 
 - [server.ts](./src/server.ts) for the parent agent, subagent query helper, and RLM module wiring
+- [server.ts](./src/server.ts) also exposes trace feedback persistence and optimization run lookups via `@cloudflare/evolve`
 - [client.tsx](./src/client.tsx) for the experimental dossier UI
 - [`packages/modules/src/rlm.ts`](../../packages/modules/src/rlm.ts) for the core shell-backed loop

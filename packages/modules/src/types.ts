@@ -53,6 +53,12 @@ export interface ModuleFeedback {
   createdAt: number;
 }
 
+export interface ModuleTraceBundle {
+  trace: ModuleTrace;
+  events: ModuleTraceEvent[];
+  feedback: ModuleFeedback[];
+}
+
 export type ModuleArtifactType =
   | "instructions"
   | "input-field-descriptions"
@@ -66,6 +72,24 @@ export interface ModuleArtifact {
   contentJson: string;
   createdAt: number;
   isActive: boolean;
+}
+
+export interface ModuleArtifactOverlayValue {
+  contentJson: string;
+  version?: string;
+}
+
+export type ModuleArtifactOverlay = Partial<
+  Record<ModuleArtifactType, ModuleArtifactOverlayValue>
+>;
+
+export type ModuleArtifactOverlayMap = Record<string, ModuleArtifactOverlay>;
+
+export interface ModuleFeedbackQuery {
+  traceId?: string;
+  traceIds?: string[];
+  modulePath?: string;
+  limit?: number;
 }
 
 export interface ModuleStore {
@@ -94,6 +118,15 @@ export interface ModuleStore {
     modulePath: string,
     options?: { limit?: number }
   ): Promise<ModuleTrace[]>;
+  getFeedback(query: ModuleFeedbackQuery): Promise<ModuleFeedback[]>;
+  getTraceBundle(
+    traceId: string,
+    options?: { eventLimit?: number; feedbackLimit?: number }
+  ): Promise<ModuleTraceBundle | null>;
+  listModulePaths(options?: {
+    prefix?: string;
+    limit?: number;
+  }): Promise<string[]>;
 }
 
 export interface ModuleASI {
@@ -111,5 +144,6 @@ export interface ModuleContext {
   store?: ModuleStore;
   emit?: (type: string, payload?: Record<string, unknown>) => void;
   asi?: ModuleASI;
+  artifacts?: ModuleArtifactOverlayMap;
   maxOutputTokens?: number;
 }
